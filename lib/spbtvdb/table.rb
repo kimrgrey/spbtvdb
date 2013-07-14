@@ -54,17 +54,23 @@ module Spbtvdb
     end
 
     def select(query)
-      result = read_from_source
-      result = result.select { |record| slice(record, query[:where].keys) == query[:where] } if query[:where]
+      result = [] 
+      read(query[:mode] || :all_at_once) do |records|
+        records = [records] unless records.is_a?(Array)
+        records = records.select { |record| slice(record, query[:where].keys) == query[:where] } if query[:where]
+        result += records
+      end
       result = result.first(query[:limit]) if query[:limit]
+      puts result.inspect
       result
     end  
 
-    def read_from_source
-      records = []
+    def read(mode, &block)
+      offset = 0
+      records = [] if mode == :all_at_once
       @source.open
       while data = @source.read(@record_size, @mask) do 
-        record = { :offset => records.size }
+        record = { :offset => offset }
         @columns.each_with_index do |column, index|
           record[column[:name]] = case column[:type] 
             when :datetime then Time.at(data[index].to_i).to_date
@@ -72,10 +78,15 @@ module Spbtvdb
             else data[index].to_s.strip
           end
         end
-        records << record
+        if mode == :all_at_once
+          records << record
+        else
+          block.call(record) 
+        end
+        offset += 1
       end
+      block.call(records) if mode == :all_at_once
       @source.close
-      records
     end
   end
 end
