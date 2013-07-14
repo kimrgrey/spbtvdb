@@ -1,4 +1,5 @@
 require "date"
+require 'spbtvdb/source'
 
 module Spbtvdb
   class Table
@@ -6,15 +7,16 @@ module Spbtvdb
     BYTES_PER_DATE = 8
 
     def initialize(table_name)
+      @table_name = table_name
       @columns = []
       @mask = ""
       @record_size = 0
-      @table_name = table_name
     end
 
-    def source (source_type, source_path)
-      @source_type = source_type
-      @source_path = source_path
+    def source(source_type, source_path)
+      @source = case source_type
+        when :file then FileSource.new(source_path)
+      end
     end
 
     def create_integer_column(column_name)
@@ -39,13 +41,11 @@ module Spbtvdb
     end
 
     def column(column_name, column_type, char_count = nil)
-      # FIXME There is a nice way to handle types?
       column = case column_type
         when :integer then create_integer_column(column_name)
         when :datetime then create_datetime_column(column_name)
         else create_string_column(column_name, char_count)
       end
-      # FIXME And what about bad data type?
       @record_size += column[:size]
     end
 
@@ -54,35 +54,28 @@ module Spbtvdb
     end
 
     def select(query)
-      read_from_source unless ready_to_use?
-      result = @records
+      result = read_from_source
       result = result.select { |record| slice(record, query[:where].keys) == query[:where] } if query[:where]
       result = result.first(query[:limit]) if query[:limit]
       result
-    end
-
-    def ready_to_use?
-      @records
-    end
+    end  
 
     def read_from_source
-      @records = []
-      File.open(@source_path, "rb") do |f|
-        offset = 0
-        while buf = f.read(@record_size) do 
-          data = buf.unpack(@mask)
-          record = { :offset => offset }
-          @columns.each_with_index do |column, index|
-            record[column[:name]] = case column[:type] 
-              when :datetime then Time.at(data[index].to_i).to_date
-              when :integer then data[index].to_i
-              else data[index].to_s.strip
-            end
+      records = []
+      @source.open
+      while data = @source.read(@record_size, @mask) do 
+        record = { :offset => records.size }
+        @columns.each_with_index do |column, index|
+          record[column[:name]] = case column[:type] 
+            when :datetime then Time.at(data[index].to_i).to_date
+            when :integer then data[index].to_i
+            else data[index].to_s.strip
           end
-          @records << record
-          offset += 1
         end
+        records << record
       end
+      @source.close
+      records
     end
   end
 end
